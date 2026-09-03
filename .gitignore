@@ -26,11 +26,15 @@ env/
 .DS_Store
 Thumbs.db
 
+# Environment variables (never commit secrets)
+.env
+.env.local
+.env.*.local
+
 # Temporary reports
 report.json
+report_*.json
 tmp_report.json
-run1_report.json
-run2_report.json
 
 # Java / Maven
 demo/springboot-demo/target/
@@ -41,29 +45,3 @@ demo/springboot-demo/target/
 # Coverage
 .coverage
 htmlcov/
-
-
-
-
-
-
-
-
-
-
-.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
-.idea/
-.vscode/
-
-.env
-.env.*
-report.json
-report_*.json
-
-target/
-demo/springboot-demo/target/
-
-.DS_Store

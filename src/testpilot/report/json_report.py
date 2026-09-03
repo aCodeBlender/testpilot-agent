@@ -154,6 +154,7 @@ def _build_case_result(
     validation: ValidationResult,
 ) -> dict[str, Any]:
     scenario_info = {
+        "source": scenario.source,
         "category": scenario.category,
         "name": scenario.name,
         "target_location": scenario.target_location,

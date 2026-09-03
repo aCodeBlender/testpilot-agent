@@ -26,8 +26,16 @@ from testpilot.generator.exceptions import TestCaseGeneratorError
 from testpilot.llm.client import OpenAICompatibleLLMClient
 from testpilot.llm.config import LLMConfig
 from testpilot.openapi import load_openapi, map_to_api_spec, select_endpoints
-from testpilot.planner import build_endpoint_catalog, generate_scenarios, plan_intent
+from testpilot.planner import (
+    build_endpoint_catalog,
+    build_semantic_test_cases,
+    generate_scenarios,
+    plan_intent,
+    plan_semantic_scenarios,
+)
 from testpilot.planner.intent_exceptions import IntentPlannerError
+from testpilot.planner.semantic_eligibility import analyze_execution_eligibility
+from testpilot.planner.semantic_exceptions import SemanticPlannerError
 from testpilot.report import build_report, write_json_report
 from testpilot.validator import validate
 
@@ -196,13 +204,22 @@ def run_pipeline(
     )
     executor = HttpExecutor(timeout_seconds=config.timeout_seconds)
 
+    # LLM client for semantic planning (only when --goal is set)
+    llm_client: OpenAICompatibleLLMClient | None = None
+    if llm_config is not None:
+        llm_client = OpenAICompatibleLLMClient(llm_config)
+
+    # Track seen scenario IDs for uniqueness across deterministic + semantic
+    seen_scenario_ids: set[str] = set()
+
     for endpoint in selected:
         all_endpoints.append(endpoint)
 
-        # D. Generate scenarios
+        # D. Generate deterministic scenarios
         scenarios = generate_scenarios(endpoint, max_cases=config.max_cases_per_endpoint)
 
         for scenario in scenarios:
+            seen_scenario_ids.add(scenario.id)
             all_scenarios.append(scenario)
 
             # E. Generate test cases
@@ -234,6 +251,34 @@ def run_pipeline(
                 # H. Validate
                 validation = validate(endpoint, scenario, case, execution)
                 all_validations.append(validation)
+
+        # ── Semantic planning (only when --goal is set) ─────────────────
+        if llm_client is not None:
+            try:
+                proposals = plan_semantic_scenarios(endpoint, llm_client)
+                decisions = analyze_execution_eligibility(proposals, endpoint)
+
+                for decision in decisions:
+                    if not decision.eligible:
+                        continue  # silently skip non-executable proposals
+
+                    semantic_pairs = build_semantic_test_cases(
+                        decision, endpoint, seen_ids=seen_scenario_ids,
+                    )
+                    for sem_scenario, sem_case in semantic_pairs:
+                        all_scenarios.append(sem_scenario)
+                        all_cases.append(sem_case)
+
+                        request_data = builder.build(sem_case)
+                        execution = executor.execute(sem_case, request_data)
+                        all_executions.append(execution)
+
+                        validation = validate(
+                            endpoint, sem_scenario, sem_case, execution,
+                        )
+                        all_validations.append(validation)
+            except SemanticPlannerError:
+                pass  # expected LLM/planner failures don't abort the run
 
     # ── I. Report ────────────────────────────────────────────────────────
     try:

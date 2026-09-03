@@ -36,13 +36,14 @@ def _scenario(
     endpoint_id: str = "ep-1",
     category: str = "happy_path",
     name: str = "Happy path",
+    source: str = "deterministic",
     target_location=None,
     target_path=None,
 ) -> TestScenario:
     return TestScenario(
         id=id,
         endpoint_id=endpoint_id,
-        source="deterministic",
+        source=source,
         category=category,
         name=name,
         target_location=target_location,
@@ -216,10 +217,21 @@ class TestCaseResult:
                        target_location="body", target_path="body.name")
         report = _build_simple_report(scenarios=[sc])
         c = report["cases"][0]
+        assert c["scenario"]["source"] == "deterministic"
         assert c["scenario"]["category"] == "required_missing"
         assert c["scenario"]["name"] == "Missing name"
         assert c["scenario"]["target_location"] == "body"
         assert c["scenario"]["target_path"] == "body.name"
+
+    def test_scenario_source_llm(self):
+        """LLM-sourced scenarios must show source='llm' in report."""
+        sc = _scenario(category="semantic_negative", name="Bad email",
+                       source="llm", target_location="body",
+                       target_path="body.email")
+        report = _build_simple_report(scenarios=[sc])
+        c = report["cases"][0]
+        assert c["scenario"]["source"] == "llm"
+        assert c["scenario"]["category"] == "semantic_negative"
 
     def test_request_info(self):
         tc = _case(

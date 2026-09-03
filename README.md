@@ -63,6 +63,7 @@ Required:
 
 Optional:
   --output, -o PATH    Report output path (default: report.json)
+  --goal TEXT          Natural-language testing goal (enables LLM semantic planning)
   --max-cases INT      Max test cases per endpoint (default: 20)
   --timeout INT        HTTP timeout in seconds (default: 30)
   --include-tag TEXT   Only test endpoints with these tags (repeatable)
@@ -88,18 +89,61 @@ python -m testpilot run --openapi ... --base-url ...
 
 Token is never printed to the console or written to the report.
 
+## LLM Semantic Testing
+
+When `--goal` is provided, TestPilot uses an LLM to generate additional semantic test scenarios beyond the deterministic ones. These scenarios probe for format violations, boundary conditions, and type confusion that deterministic generation cannot cover.
+
+### Configuration
+
+Set LLM credentials via environment variables or a `.env` file.
+
+**Option A: Environment variables**
+
+```bash
+export TESTPILOT_LLM_API_KEY=sk-your-key-here
+export TESTPILOT_LLM_BASE_URL=https://api.openai.com/v1
+export TESTPILOT_LLM_MODEL=gpt-4o-mini
+```
+
+**Option B: `.env` file**
+
+Copy the example and fill in your values:
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+The `.env` file is loaded automatically at startup. Explicitly defined environment variables always take precedence over `.env` values.
+
+### How it works
+
+1. **Intent Planning** — The LLM selects which endpoints to test based on your goal
+2. **Semantic Planning** — The LLM proposes creative negative test scenarios (format violations, boundary values, type confusion)
+3. **Eligibility Filtering** — Proposals are checked against schema constraints; only those that provably violate a constraint are executed
+4. **Execution** — Semantic tests run through the same HTTP → Validate → Report pipeline as deterministic tests
+
+Semantic scenarios appear in the report with `"source": "llm"` and `"category": "semantic_negative"`.
+
+### Safety
+
+- LLM failures never abort the run — deterministic tests always complete
+- Only body-parameter mutations are attempted (no path/query/header mutations)
+- Proposals that cannot be verified against the schema are silently skipped
+- API keys are never printed or written to the report
+
 ## Current Scope
 
 **Supported:**
 - OpenAPI 3.0.x
 - Deterministic happy path / negative API testing
 - Scenarios: happy_path, required_missing, null, wrong_type
-- JSON report with sensitive value redaction
+- LLM-powered semantic negative testing (with `--goal`)
+- JSON report with sensitive value redaction and source provenance
 - Spring Boot / Swagger / springdoc-openapi
 
 **Not yet supported:**
 - OpenAPI 3.1
-- LLM semantic test planning
 - API dependency propagation
 - DB / Redis validation
 - Browser / UI testing

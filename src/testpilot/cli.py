@@ -15,10 +15,15 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from dotenv import load_dotenv
+
 from testpilot.config import AppConfig
 from testpilot.llm.config import load_llm_config_from_env
 from testpilot.llm.exceptions import LLMConfigError
 from testpilot.runner import run_pipeline
+
+# Load .env file if present — does NOT override existing environment variables
+load_dotenv()
 
 app = typer.Typer(
     name="testpilot",

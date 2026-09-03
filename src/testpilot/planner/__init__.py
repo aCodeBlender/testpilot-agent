@@ -6,6 +6,7 @@ from testpilot.planner.intent_planner import build_endpoint_catalog, plan_intent
 from testpilot.planner.scenario_generator import generate_scenarios
 from testpilot.planner.semantic_exceptions import SemanticPlannerError
 from testpilot.planner.semantic_planner import build_endpoint_prompt_context, plan_semantic_scenarios
+from testpilot.planner.semantic_wiring import build_semantic_test_cases
 
 __all__ = [
     "IntentPlannerError",
@@ -13,6 +14,7 @@ __all__ = [
     "SemanticPlannerError",
     "build_endpoint_catalog",
     "build_endpoint_prompt_context",
+    "build_semantic_test_cases",
     "generate_scenarios",
     "plan_intent",
     "plan_semantic_scenarios",
