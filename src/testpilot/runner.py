@@ -1,6 +1,6 @@
 """Runner — thin orchestration for the TestPilot pipeline.
 
-Runs: Load → Map → Select → Scenarios → Cases → Build → Execute → Validate → Report.
+Runs: Load → Map → Select → [optional LLM Intent] → Scenarios → Cases → Build → Execute → Validate → Report.
 
 This is a plain function, not a framework.  CLI decides display and exit codes.
 """
@@ -12,13 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from testpilot.config import AppConfig
-from testpilot.openapi import load_openapi, map_to_api_spec, select_endpoints
-from testpilot.planner import generate_scenarios
-from testpilot.generator import generate_test_cases
-from testpilot.generator.exceptions import TestCaseGeneratorError
-from testpilot.executor import RequestBuilder, HttpExecutor
-from testpilot.validator import validate
-from testpilot.report import build_report, write_json_report
+from testpilot.domain.intent import TestIntent
 from testpilot.domain.spec import ApiEndpoint
 from testpilot.domain.testing import (
     ExecutionResult,
@@ -26,6 +20,16 @@ from testpilot.domain.testing import (
     TestScenario,
     ValidationResult,
 )
+from testpilot.executor import HttpExecutor, RequestBuilder
+from testpilot.generator import generate_test_cases
+from testpilot.generator.exceptions import TestCaseGeneratorError
+from testpilot.llm.client import OpenAICompatibleLLMClient
+from testpilot.llm.config import LLMConfig
+from testpilot.openapi import load_openapi, map_to_api_spec, select_endpoints
+from testpilot.planner import build_endpoint_catalog, generate_scenarios, plan_intent
+from testpilot.planner.intent_exceptions import IntentPlannerError
+from testpilot.report import build_report, write_json_report
+from testpilot.validator import validate
 
 
 # ── Outcome ──────────────────────────────────────────────────────────────────
@@ -43,12 +47,18 @@ class RunOutcome:
     passed_count: int = 0
     failed_count: int = 0
     errors_count: int = 0
+    intent: TestIntent | None = None
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
-def run_pipeline(config: AppConfig, output_path: Path) -> RunOutcome:
+def run_pipeline(
+    config: AppConfig,
+    output_path: Path,
+    *,
+    llm_config: LLMConfig | None = None,
+) -> RunOutcome:
     """Execute the full TestPilot deterministic pipeline.
 
     Parameters
@@ -57,6 +67,9 @@ def run_pipeline(config: AppConfig, output_path: Path) -> RunOutcome:
         Runtime configuration (openapi source, base URL, filters, limits).
     output_path:
         Where to write the JSON report.
+    llm_config:
+        Optional LLM configuration.  Only provided when ``config.goal`` is set.
+        Not part of AppConfig — loaded separately by the CLI.
 
     Returns
     -------
@@ -88,7 +101,7 @@ def run_pipeline(config: AppConfig, output_path: Path) -> RunOutcome:
             report={"error": "No endpoints found in OpenAPI spec."},
         )
 
-    # ── C. Select endpoints ──────────────────────────────────────────────
+    # ── C. Select endpoints (deterministic pre-filter) ──────────────────
     selected = select_endpoints(
         api_spec.endpoints,
         include_tags=config.include_tags or None,
@@ -100,6 +113,74 @@ def run_pipeline(config: AppConfig, output_path: Path) -> RunOutcome:
             exit_code=2,
             report={"error": "No endpoints matched the selected filters."},
         )
+
+    # ── C2. LLM Intent Planning (optional) ──────────────────────────────
+    intent: TestIntent | None = None
+    if config.goal:
+        if llm_config is None:
+            return RunOutcome(
+                exit_code=2,
+                report={"error": "LLM configuration required when --goal is used."},
+            )
+        try:
+            llm_client = OpenAICompatibleLLMClient(llm_config)
+            catalog = build_endpoint_catalog(selected)
+            intent = plan_intent(config.goal, catalog, llm_client)
+        except IntentPlannerError as exc:
+            return RunOutcome(
+                exit_code=2,
+                report={"error": f"Intent planning failed: {exc}"},
+            )
+        except Exception as exc:
+            return RunOutcome(
+                exit_code=2,
+                report={"error": f"Unexpected intent planning error: {exc}"},
+            )
+
+        # Apply intent to filter endpoints
+        if intent.selection_mode == "none":
+            return RunOutcome(
+                exit_code=0,
+                report={
+                    "summary": {
+                        "total_endpoints": 0,
+                        "total_scenarios": 0,
+                        "total_cases": 0,
+                        "passed": 0,
+                        "failed": 0,
+                        "errors": 0,
+                        "pass_rate": 0.0,
+                    },
+                    "endpoints": [],
+                    "cases": [],
+                },
+                intent=intent,
+            )
+
+        selected = select_endpoints(
+            selected,
+            endpoint_ids=intent.selected_endpoint_ids,
+            exclude_methods=intent.excluded_methods or None,
+        )
+
+        if not selected:
+            return RunOutcome(
+                exit_code=0,
+                report={
+                    "summary": {
+                        "total_endpoints": 0,
+                        "total_scenarios": 0,
+                        "total_cases": 0,
+                        "passed": 0,
+                        "failed": 0,
+                        "errors": 0,
+                        "pass_rate": 0.0,
+                    },
+                    "endpoints": [],
+                    "cases": [],
+                },
+                intent=intent,
+            )
 
     # ── D–I. Generate, Execute, Validate ─────────────────────────────────
     all_endpoints: list[ApiEndpoint] = []
@@ -184,4 +265,5 @@ def run_pipeline(config: AppConfig, output_path: Path) -> RunOutcome:
         passed_count=summary.get("passed", 0),
         failed_count=summary.get("failed", 0),
         errors_count=summary.get("errors", 0),
+        intent=intent,
     )

@@ -15,6 +15,9 @@ class AppConfig(BaseModel):
     This is intentionally separate from ApiSpec:
     - ApiSpec holds the OpenAPI spec metadata (servers, endpoints, etc.)
     - AppConfig holds the runtime choices (which server to hit, auth, filters)
+
+    LLM configuration is NOT part of AppConfig.  It is loaded separately
+    via ``LLMConfig`` only when ``--goal`` is used.
     """
 
     # --- Required ---
@@ -57,4 +60,10 @@ class AppConfig(BaseModel):
         default=30,
         ge=1,
         description="HTTP request timeout in seconds",
+    )
+
+    # --- LLM Intent (Phase 3A) ---
+    goal: str | None = Field(
+        default=None,
+        description="Natural language test goal (triggers LLM intent planning)",
     )

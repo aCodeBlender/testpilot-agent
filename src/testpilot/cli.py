@@ -1,8 +1,8 @@
-"""CLI entry point for TestPilot — T0209.
+"""CLI entry point for TestPilot — T0209 + T0303.
 
 Usage:
     python -m testpilot run --openapi <url-or-path> --base-url <url>
-    testpilot run --openapi <url-or-path> --base-url <url>
+    python -m testpilot run --openapi <url-or-path> --base-url <url> --goal "test user creation"
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from rich.console import Console
 from rich.table import Table
 
 from testpilot.config import AppConfig
+from testpilot.llm.config import load_llm_config_from_env
+from testpilot.llm.exceptions import LLMConfigError
 from testpilot.runner import run_pipeline
 
 app = typer.Typer(
@@ -72,16 +74,32 @@ def run(
         "--exclude-tag",
         help="Skip endpoints with these tags (repeatable).",
     ),
+    goal: str | None = typer.Option(
+        None,
+        "--goal",
+        help="Natural language test goal (triggers LLM intent planning).",
+    ),
 ) -> None:
     """Run deterministic API tests against the target."""
     # ── Banner ───────────────────────────────────────────────────────────
     console.print("[bold]TestPilot[/bold] v0.1.0")
     console.print(f"  OpenAPI:  {openapi}")
     console.print(f"  Target:   {base_url}")
+    if goal:
+        console.print(f"  Goal:     {goal}")
     console.print()
 
     # ── Auth from environment ────────────────────────────────────────────
     bearer_token = os.environ.get("TESTPILOT_BEARER_TOKEN")
+
+    # ── LLM config (only when --goal is used) ───────────────────────────
+    llm_config = None
+    if goal:
+        try:
+            llm_config = load_llm_config_from_env()
+        except LLMConfigError as exc:
+            console.print(f"[red]LLM configuration error:[/red] {exc}")
+            raise typer.Exit(code=2)
 
     # ── Build config ─────────────────────────────────────────────────────
     try:
@@ -93,6 +111,7 @@ def run(
             exclude_tags=exclude_tag,
             max_cases_per_endpoint=max_cases or 20,
             timeout_seconds=timeout or 30,
+            goal=goal,
         )
     except Exception as exc:
         console.print(f"[red]Configuration error:[/red] {exc}")
@@ -100,7 +119,7 @@ def run(
 
     # ── Run pipeline ─────────────────────────────────────────────────────
     try:
-        outcome = run_pipeline(config, output)
+        outcome = run_pipeline(config, output, llm_config=llm_config)
     except Exception as exc:
         console.print(f"[red]Unexpected error:[/red] {exc}")
         raise typer.Exit(code=2)
@@ -113,6 +132,14 @@ def run(
         error_msg = report.get("error", "Unknown error")
         console.print(f"[red]Error:[/red] {error_msg}")
         raise typer.Exit(code=2)
+
+    # Display intent info if goal was used
+    if outcome.intent:
+        console.print(f"[dim]Intent: mode={outcome.intent.selection_mode}, "
+                      f"excluded={outcome.intent.excluded_methods}[/dim]")
+        if outcome.intent.selection_mode == "none":
+            console.print("[yellow]No endpoints matched the goal — nothing to test.[/yellow]")
+        console.print()
 
     # Display per-case results
     _print_case_results(report)

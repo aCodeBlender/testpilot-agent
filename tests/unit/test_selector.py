@@ -6,8 +6,8 @@ from testpilot.openapi.selector import select_endpoints
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def _ep(id: str, tags: list[str] | None = None) -> ApiEndpoint:
-    return ApiEndpoint(id=id, path=f"/{id}", method="GET", tags=tags or [])
+def _ep(id: str, tags: list[str] | None = None, method: str = "GET") -> ApiEndpoint:
+    return ApiEndpoint(id=id, path=f"/{id}", method=method, tags=tags or [])
 
 
 # ── Tests ───────────────────────────────────────────────────────────────────
@@ -94,4 +94,81 @@ class TestSelectEndpoints:
     def test_tag_order_preserved(self):
         eps = [_ep("z", ["x"]), _ep("a", ["x"]), _ep("m", ["x"])]
         result = select_endpoints(eps, include_tags=["x"])
+        assert [e.id for e in result] == ["z", "a", "m"]
+
+
+class TestSelectByIdAndMethod:
+    """Tests for endpoint_ids and exclude_methods filtering (T0303)."""
+
+    def test_endpoint_ids_filter(self):
+        eps = [_ep("a"), _ep("b"), _ep("c")]
+        result = select_endpoints(eps, endpoint_ids=["a", "c"])
+        assert [e.id for e in result] == ["a", "c"]
+
+    def test_endpoint_ids_empty_means_all(self):
+        eps = [_ep("a"), _ep("b")]
+        result = select_endpoints(eps, endpoint_ids=[])
+        assert len(result) == 2
+
+    def test_endpoint_ids_none_means_all(self):
+        eps = [_ep("a"), _ep("b")]
+        result = select_endpoints(eps, endpoint_ids=None)
+        assert len(result) == 2
+
+    def test_exclude_methods(self):
+        eps = [
+            _ep("a", method="GET"),
+            _ep("b", method="POST"),
+            _ep("c", method="DELETE"),
+        ]
+        result = select_endpoints(eps, exclude_methods=["DELETE"])
+        assert [e.id for e in result] == ["a", "b"]
+
+    def test_exclude_methods_case_insensitive(self):
+        """exclude_methods parameter is case-insensitive (lowercase input)."""
+        eps = [
+            _ep("a", method="GET"),
+            _ep("b", method="DELETE"),
+        ]
+        result = select_endpoints(eps, exclude_methods=["delete"])
+        assert [e.id for e in result] == ["a"]
+
+    def test_exclude_multiple_methods(self):
+        eps = [
+            _ep("a", method="GET"),
+            _ep("b", method="POST"),
+            _ep("c", method="DELETE"),
+            _ep("d", method="PUT"),
+        ]
+        result = select_endpoints(eps, exclude_methods=["DELETE", "PUT"])
+        assert [e.id for e in result] == ["a", "b"]
+
+    def test_tags_then_ids_intersection(self):
+        """endpoint_ids filter is applied AFTER tag filter."""
+        eps = [
+            _ep("a", ["user"], "GET"),
+            _ep("b", ["user"], "POST"),
+            _ep("c", ["admin"], "GET"),
+        ]
+        result = select_endpoints(
+            eps, include_tags=["user"], endpoint_ids=["a", "c"]
+        )
+        # "c" is excluded by tag filter first, then ID filter keeps only "a"
+        assert [e.id for e in result] == ["a"]
+
+    def test_ids_then_methods(self):
+        """exclude_methods is applied AFTER endpoint_ids."""
+        eps = [
+            _ep("a", method="GET"),
+            _ep("b", method="POST"),
+            _ep("c", method="DELETE"),
+        ]
+        result = select_endpoints(
+            eps, endpoint_ids=["a", "b", "c"], exclude_methods=["DELETE"]
+        )
+        assert [e.id for e in result] == ["a", "b"]
+
+    def test_order_preserved(self):
+        eps = [_ep("z", method="GET"), _ep("a", method="POST"), _ep("m", method="GET")]
+        result = select_endpoints(eps, endpoint_ids=["m", "z", "a"])
         assert [e.id for e in result] == ["z", "a", "m"]

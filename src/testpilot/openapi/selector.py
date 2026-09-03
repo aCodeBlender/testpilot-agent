@@ -1,6 +1,7 @@
-"""Endpoint Selector — deterministic filtering by tag.
+"""Endpoint Selector — deterministic filtering by tag, ID, and method.
 
-Filters an ``ApiEndpoint`` list by ``include_tags`` / ``exclude_tags``.
+Filters an ``ApiEndpoint`` list by ``include_tags`` / ``exclude_tags``,
+``endpoint_ids``, and ``exclude_methods``.
 Returns a new list; does not mutate the input.
 """
 
@@ -14,8 +15,12 @@ def select_endpoints(
     *,
     include_tags: list[str] | None = None,
     exclude_tags: list[str] | None = None,
+    endpoint_ids: list[str] | None = None,
+    exclude_methods: list[str] | None = None,
 ) -> list[ApiEndpoint]:
-    """Filter *endpoints* by tag inclusion / exclusion rules.
+    """Filter *endpoints* by tag, ID, and HTTP method.
+
+    Filter order: tags → endpoint IDs → method exclusion.
 
     Parameters
     ----------
@@ -27,6 +32,12 @@ def select_endpoints(
     exclude_tags:
         Endpoints that have **any** tag in this list are dropped.
         Applied after *include_tags* filtering.
+    endpoint_ids:
+        If non-empty, only endpoints whose ``id`` is in this list are kept.
+        Applied after tag filtering.
+    exclude_methods:
+        Endpoints whose HTTP method is in this list are dropped.
+        Applied last.  Case-insensitive.
 
     Returns
     -------
@@ -44,5 +55,15 @@ def select_endpoints(
     if exclude_tags:
         exclude_set = set(exclude_tags)
         result = [ep for ep in result if not exclude_set.intersection(ep.tags)]
+
+    # ── endpoint ID filter ──────────────────────────────────────────────
+    if endpoint_ids:
+        id_set = set(endpoint_ids)
+        result = [ep for ep in result if ep.id in id_set]
+
+    # ── method exclusion ────────────────────────────────────────────────
+    if exclude_methods:
+        method_set = {m.upper() for m in exclude_methods}
+        result = [ep for ep in result if ep.method.upper() not in method_set]
 
     return result

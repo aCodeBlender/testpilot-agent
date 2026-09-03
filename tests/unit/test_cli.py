@@ -871,3 +871,139 @@ class TestRunnerReport:
         assert outcome.exit_code == 0
         assert outcome.report_path == output_path
         mock_write.assert_called_once_with(mock_report, output_path)
+
+
+# ── CLI --goal tests (T0303) ────────────────────────────────────────────────
+
+
+class TestCLIGoal:
+    """Tests for --goal CLI option."""
+
+    def _set_all_llm_env(self, monkeypatch):
+        monkeypatch.setenv("TESTPILOT_LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("TESTPILOT_LLM_BASE_URL", "https://api.test.com/v1")
+        monkeypatch.setenv("TESTPILOT_LLM_MODEL", "test-model")
+
+    def _clear_all_llm_env(self, monkeypatch):
+        monkeypatch.delenv("TESTPILOT_LLM_API_KEY", raising=False)
+        monkeypatch.delenv("TESTPILOT_LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("TESTPILOT_LLM_MODEL", raising=False)
+
+    def test_no_goal_old_behavior_unchanged(self, monkeypatch):
+        """Without --goal, behavior is identical to Phase 2."""
+        self._clear_all_llm_env(monkeypatch)
+        monkeypatch.delenv("TESTPILOT_BEARER_TOKEN", raising=False)
+
+        mock_outcome = _mock_run_outcome(exit_code=0, total=1, passed=1)
+
+        with patch("testpilot.cli.run_pipeline", return_value=mock_outcome):
+            result = runner.invoke(app, [
+                "run",
+                "--openapi", "http://localhost:8080/v3/api-docs",
+                "--base-url", "http://localhost:8080",
+            ])
+
+        assert result.exit_code == 0
+
+    def test_goal_missing_api_key_exit_2(self, monkeypatch):
+        """--goal without TESTPILOT_LLM_API_KEY → exit 2."""
+        self._clear_all_llm_env(monkeypatch)
+
+        result = runner.invoke(app, [
+            "run",
+            "--openapi", "http://localhost:8080/v3/api-docs",
+            "--base-url", "http://localhost:8080",
+            "--goal", "test everything",
+        ])
+
+        assert result.exit_code == 2
+        assert "TESTPILOT_LLM_API_KEY" in result.output
+
+    def test_goal_missing_base_url_exit_2(self, monkeypatch):
+        """--goal without TESTPILOT_LLM_BASE_URL → exit 2."""
+        monkeypatch.setenv("TESTPILOT_LLM_API_KEY", "sk-test")
+        monkeypatch.delenv("TESTPILOT_LLM_BASE_URL", raising=False)
+        monkeypatch.setenv("TESTPILOT_LLM_MODEL", "m")
+
+        result = runner.invoke(app, [
+            "run",
+            "--openapi", "http://localhost:8080/v3/api-docs",
+            "--base-url", "http://localhost:8080",
+            "--goal", "test everything",
+        ])
+
+        assert result.exit_code == 2
+        assert "TESTPILOT_LLM_BASE_URL" in result.output
+
+    def test_goal_missing_model_exit_2(self, monkeypatch):
+        """--goal without TESTPILOT_LLM_MODEL → exit 2."""
+        monkeypatch.setenv("TESTPILOT_LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("TESTPILOT_LLM_BASE_URL", "https://api.test.com/v1")
+        monkeypatch.delenv("TESTPILOT_LLM_MODEL", raising=False)
+
+        result = runner.invoke(app, [
+            "run",
+            "--openapi", "http://localhost:8080/v3/api-docs",
+            "--base-url", "http://localhost:8080",
+            "--goal", "test everything",
+        ])
+
+        assert result.exit_code == 2
+        assert "TESTPILOT_LLM_MODEL" in result.output
+
+    def test_goal_with_valid_config(self, monkeypatch):
+        """--goal with valid LLM config → pipeline runs."""
+        self._set_all_llm_env(monkeypatch)
+        mock_outcome = _mock_run_outcome(exit_code=0, total=1, passed=1)
+        mock_outcome.intent = MagicMock()
+        mock_outcome.intent.selection_mode = "all"
+        mock_outcome.intent.excluded_methods = []
+
+        with patch("testpilot.cli.run_pipeline", return_value=mock_outcome):
+            result = runner.invoke(app, [
+                "run",
+                "--openapi", "http://localhost:8080/v3/api-docs",
+                "--base-url", "http://localhost:8080",
+                "--goal", "test everything",
+            ])
+
+        assert result.exit_code == 0
+
+    def test_goal_intent_displayed(self, monkeypatch):
+        """--goal output shows intent info."""
+        self._set_all_llm_env(monkeypatch)
+        mock_outcome = _mock_run_outcome(exit_code=0, total=1, passed=1)
+        mock_outcome.intent = MagicMock()
+        mock_outcome.intent.selection_mode = "subset"
+        mock_outcome.intent.excluded_methods = ["DELETE"]
+
+        with patch("testpilot.cli.run_pipeline", return_value=mock_outcome):
+            result = runner.invoke(app, [
+                "run",
+                "--openapi", "http://localhost:8080/v3/api-docs",
+                "--base-url", "http://localhost:8080",
+                "--goal", "test create and get, skip DELETE",
+            ])
+
+        assert result.exit_code == 0
+        assert "Intent" in result.output
+
+    def test_goal_secret_not_in_output(self, monkeypatch):
+        """API key must never appear in CLI output."""
+        self._set_all_llm_env(monkeypatch)
+        monkeypatch.setenv("TESTPILOT_LLM_API_KEY", "sk-super-secret-key-12345")
+
+        mock_outcome = _mock_run_outcome(exit_code=0, total=1, passed=1)
+        mock_outcome.intent = MagicMock()
+        mock_outcome.intent.selection_mode = "all"
+        mock_outcome.intent.excluded_methods = []
+
+        with patch("testpilot.cli.run_pipeline", return_value=mock_outcome):
+            result = runner.invoke(app, [
+                "run",
+                "--openapi", "http://localhost:8080/v3/api-docs",
+                "--base-url", "http://localhost:8080",
+                "--goal", "test everything",
+            ])
+
+        assert "sk-super-secret-key-12345" not in result.output
