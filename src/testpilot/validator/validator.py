@@ -30,6 +30,7 @@ _KNOWN_CATEGORIES = frozenset({
     "wrong_type",
     "missing_auth",
     "invalid_path_id",
+    "semantic_negative",
 })
 
 
@@ -159,7 +160,7 @@ def _check_status(
     if category == "happy_path":
         return _check_happy_path_status(endpoint, status_code)
 
-    if category in ("required_missing", "null", "wrong_type", "invalid_path_id"):
+    if category in ("required_missing", "null", "wrong_type", "invalid_path_id", "semantic_negative"):
         if 400 <= status_code <= 499:
             return CheckResult(name="status", passed=True)
         return CheckResult(
@@ -234,7 +235,7 @@ def _collect_declared_success_codes(responses: dict[str, ApiResponse]) -> set[in
 def _expected_status_desc(category: str) -> str:
     if category == "happy_path":
         return "2xx success"
-    if category in ("required_missing", "null", "wrong_type", "invalid_path_id"):
+    if category in ("required_missing", "null", "wrong_type", "invalid_path_id", "semantic_negative"):
         return "4xx client error"
     if category == "missing_auth":
         return "401 or 403"

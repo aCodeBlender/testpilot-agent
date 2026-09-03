@@ -34,6 +34,7 @@ ScenarioCategory = Literal[
     "invalid_path_id",
     "missing_auth",
     "semantic",
+    "semantic_negative",
 ]
 """High-level category of what the scenario tests."""
 
