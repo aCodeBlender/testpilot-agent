@@ -9,6 +9,12 @@ from testpilot.domain.schema import (
     HttpMethod,
     ParameterLocation,
 )
+from testpilot.domain.semantic import (
+    SemanticScenarioProposal,
+    SemanticCategory,
+    SemanticStrategy,
+    SemanticTargetLocation,
+)
 from testpilot.domain.testing import (
     TestScenario,
     TestCase,
@@ -30,6 +36,10 @@ __all__ = [
     "ApiResponse",
     "HttpMethod",
     "ParameterLocation",
+    "SemanticScenarioProposal",
+    "SemanticCategory",
+    "SemanticStrategy",
+    "SemanticTargetLocation",
     "TestScenario",
     "TestCase",
     "ExecutionResult",
