@@ -1,0 +1,18 @@
+# Build output
+target/
+
+# Maven wrapper jar (downloaded on first use)
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
