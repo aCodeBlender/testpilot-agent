@@ -91,6 +91,20 @@ pip install -e .
 
 ### 基本用法
 
+**CLI**（自动化/CI）：
+
+```bash
+python -m testpilot run --openapi http://localhost:8080/v3/api-docs --base-url http://localhost:8080
+```
+
+**Web UI**（交互式本地测试/演示）：
+
+```bash
+python -m testpilot web
+```
+
+打开 http://localhost:7860。
+
 ```bash
 # 最简用法
 python -m testpilot run --openapi http://localhost:8080/v3/api-docs --base-url http://localhost:8080
@@ -245,6 +259,23 @@ cp .env.example .env
 - 仅尝试 body 参数变更（不变更 path/query/header）
 - 无法根据 schema 验证的提案会被静默跳过
 - API 密钥不会被打印或写入报告
+
+## Web UI
+
+TestPilot 包含基于 Gradio 的 Web 界面，用于交互式测试：
+
+```bash
+python -m testpilot web
+```
+
+Web UI 提供：
+- OpenAPI URL、目标 Base URL 和测试目标的输入框
+- 使用与 CLI 相同的 Runner 一键执行测试
+- 通过/失败计数的汇总表
+- 逐用例详情，含请求/响应检查
+- 确定性测试与 AI 生成测试的可视化区分
+
+CLI 用于自动化和 CI 流水线，Web UI 用于交互式本地测试和演示。
 
 ## 当前限制
 

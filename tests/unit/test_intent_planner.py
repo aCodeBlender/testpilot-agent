@@ -136,10 +136,11 @@ class TestPlanIntent:
         with pytest.raises(IntentPlannerError, match="invalid JSON"):
             plan_intent("test", _catalog(), client)
 
-    def test_invalid_schema_rejected(self):
+    def test_invalid_schema_rejected_after_repair(self):
         client = _mock_llm_client({"completely": "wrong"})
-        with pytest.raises(IntentPlannerError, match="TestIntent schema"):
+        with pytest.raises(IntentPlannerError, match="repair attempt"):
             plan_intent("test", _catalog(), client)
+        assert client.call.call_count == 2
 
     def test_selection_mode_none(self):
         client = _mock_llm_client({
@@ -151,27 +152,33 @@ class TestPlanIntent:
         intent = plan_intent("something unrelated", _catalog(), client)
         assert intent.selection_mode == "none"
 
-    def test_all_with_ids_rejected_by_consistency(self):
-        """LLM returns 'all' with IDs — rejected by TestIntent consistency."""
-        client = _mock_llm_client({
+    def test_all_with_ids_rejected_after_repair(self):
+        """LLM returns 'all' with IDs — repair attempted, still fails."""
+        bad = {
             "selection_mode": "all",
             "selected_endpoint_ids": ["createUser"],
             "excluded_methods": [],
             "focus_areas": [],
-        })
-        with pytest.raises(IntentPlannerError, match="TestIntent schema"):
+        }
+        # Mock returns same bad response for both calls
+        client = _mock_llm_client(bad)
+        with pytest.raises(IntentPlannerError, match="repair attempt"):
             plan_intent("test", _catalog(), client)
+        # LLM called twice: original + repair
+        assert client.call.call_count == 2
 
-    def test_subset_with_empty_ids_rejected_by_consistency(self):
-        """LLM returns 'subset' with empty IDs — rejected by TestIntent consistency."""
-        client = _mock_llm_client({
+    def test_subset_with_empty_ids_rejected_after_repair(self):
+        """LLM returns 'subset' with empty IDs — repair attempted, still fails."""
+        bad = {
             "selection_mode": "subset",
             "selected_endpoint_ids": [],
             "excluded_methods": [],
             "focus_areas": [],
-        })
-        with pytest.raises(IntentPlannerError, match="TestIntent schema"):
+        }
+        client = _mock_llm_client(bad)
+        with pytest.raises(IntentPlannerError, match="repair attempt"):
             plan_intent("test", _catalog(), client)
+        assert client.call.call_count == 2
 
     def test_markdown_fences_stripped(self):
         raw_response = '```json\n{"selection_mode":"all","selected_endpoint_ids":[],"excluded_methods":[],"focus_areas":[]}\n```'
@@ -189,4 +196,154 @@ class TestPlanIntent:
         client = MagicMock()
         client.call.side_effect = Exception("connection refused")
         with pytest.raises(IntentPlannerError, match="LLM call failed"):
+            plan_intent("test", _catalog(), client)
+
+    # ── Repair retry tests ────────────────────────────────────────────────
+
+    def test_valid_subset_no_retry(self):
+        """Valid subset on first attempt — no repair needed."""
+        client = _mock_llm_client({
+            "selection_mode": "subset",
+            "selected_endpoint_ids": ["createUser"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        })
+        intent = plan_intent("test create", _catalog(), client)
+        assert intent.selection_mode == "subset"
+        assert client.call.call_count == 1
+
+    def test_valid_all_no_retry(self):
+        """Valid all+empty on first attempt — no repair needed."""
+        client = _mock_llm_client({
+            "selection_mode": "all",
+            "selected_endpoint_ids": [],
+            "excluded_methods": [],
+            "focus_areas": [],
+        })
+        intent = plan_intent("test everything", _catalog(), client)
+        assert intent.selection_mode == "all"
+        assert client.call.call_count == 1
+
+    def test_repair_all_with_ids_to_subset(self):
+        """First returns all+IDs → repair returns valid subset → success."""
+        first = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": ["createUser", "getUser"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        repair = {
+            "selection_mode": "subset",
+            "selected_endpoint_ids": ["createUser", "getUser"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        client = MagicMock()
+        client.call.side_effect = [json.dumps(first), json.dumps(repair)]
+        intent = plan_intent("test create and get", _catalog(), client)
+        assert intent.selection_mode == "subset"
+        assert set(intent.selected_endpoint_ids) == {"createUser", "getUser"}
+        assert client.call.call_count == 2
+
+    def test_repair_all_with_ids_to_all_empty(self):
+        """First returns all+IDs → repair returns all+[] → success."""
+        first = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": ["createUser"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        repair = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": [],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        client = MagicMock()
+        client.call.side_effect = [json.dumps(first), json.dumps(repair)]
+        intent = plan_intent("test everything", _catalog(), client)
+        assert intent.selection_mode == "all"
+        assert intent.selected_endpoint_ids == []
+        assert client.call.call_count == 2
+
+    def test_repair_still_fails_raises(self):
+        """First fails, repair also fails → IntentPlannerError."""
+        bad = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": ["createUser"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        client = _mock_llm_client(bad)  # same bad response both times
+        with pytest.raises(IntentPlannerError, match="repair attempt"):
+            plan_intent("test", _catalog(), client)
+        assert client.call.call_count == 2
+
+    def test_max_two_llm_calls(self):
+        """At most 2 LLM calls: original + 1 repair."""
+        bad = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": ["createUser"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        client = _mock_llm_client(bad)
+        with pytest.raises(IntentPlannerError):
+            plan_intent("test", _catalog(), client)
+        assert client.call.call_count == 2
+
+    def test_repair_preserves_excluded_methods(self):
+        """Repair result must still respect excluded_methods validation."""
+        first = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": ["createUser"],
+            "excluded_methods": ["INVALID"],
+            "focus_areas": [],
+        }
+        repair = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": [],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        client = MagicMock()
+        client.call.side_effect = [json.dumps(first), json.dumps(repair)]
+        intent = plan_intent("test", _catalog(), client)
+        # Excluded methods should be valid
+        assert all(m in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}
+                    for m in intent.excluded_methods)
+
+    def test_repair_no_hallucination_guard_bypass(self):
+        """Repair must still pass hallucination guard — unknown IDs rejected."""
+        first = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": ["createUser"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        repair = {
+            "selection_mode": "subset",
+            "selected_endpoint_ids": ["NONEXISTENT"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        client = MagicMock()
+        client.call.side_effect = [json.dumps(first), json.dumps(repair)]
+        with pytest.raises(IntentPlannerError, match="NONEXISTENT"):
+            plan_intent("test", _catalog(), client)
+
+    def test_repair_llm_call_failure_raises(self):
+        """If repair LLM call fails, raise IntentPlannerError."""
+        first = {
+            "selection_mode": "all",
+            "selected_endpoint_ids": ["createUser"],
+            "excluded_methods": [],
+            "focus_areas": [],
+        }
+        client = MagicMock()
+        client.call.side_effect = [
+            json.dumps(first),
+            Exception("connection refused"),
+        ]
+        with pytest.raises(IntentPlannerError, match="repair call also failed"):
             plan_intent("test", _catalog(), client)

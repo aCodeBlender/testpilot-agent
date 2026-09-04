@@ -24,11 +24,21 @@ cd demo/springboot-demo
 
 ### 2. Run TestPilot
 
+**CLI** (automation / CI):
+
 ```bash
 python -m testpilot run \
   --openapi http://localhost:8080/v3/api-docs \
   --base-url http://localhost:8080
 ```
+
+**Web UI** (interactive local testing / demo):
+
+```bash
+python -m testpilot web
+```
+
+Opens at http://localhost:7860.
 
 Output: `report.json`
 
@@ -131,6 +141,23 @@ Semantic scenarios appear in the report with `"source": "llm"` and `"category": 
 - Only body-parameter mutations are attempted (no path/query/header mutations)
 - Proposals that cannot be verified against the schema are silently skipped
 - API keys are never printed or written to the report
+
+## Web UI
+
+TestPilot includes a Gradio-based web interface for interactive testing:
+
+```bash
+python -m testpilot web
+```
+
+The web UI provides:
+- Input fields for OpenAPI URL, target base URL, and testing goal
+- One-click test execution using the same runner as the CLI
+- Summary table with pass/fail counts
+- Per-case details with request/response inspection
+- Visual distinction between deterministic and AI-generated tests
+
+Use the CLI for automation and CI pipelines. Use the Web UI for interactive local testing and demos.
 
 ## Current Scope
 

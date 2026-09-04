@@ -59,7 +59,24 @@ Rules:
 5. Use exact endpoint IDs from the provided list.
 6. selection_mode="all" means test ALL listed endpoints (respecting excluded_methods).
 7. selection_mode="subset" means test ONLY the listed selected_endpoint_ids.
-8. selection_mode="none" means the goal cannot be mapped to any endpoint."""
+8. selection_mode="none" means the goal cannot be mapped to any endpoint.
+
+CRITICAL - selection_mode and selected_endpoint_ids must be consistent:
+- "all"  -> selected_endpoint_ids MUST be [] (empty list)
+- "subset" -> selected_endpoint_ids MUST list the specific endpoint IDs to test
+- "none" -> selected_endpoint_ids MUST be [] (empty list)
+
+If you want to explicitly list endpoint IDs, you MUST use "subset" mode.
+
+Correct examples:
+  {"selection_mode": "all", "selected_endpoint_ids": [], "excluded_methods": [], "focus_areas": []}
+  {"selection_mode": "subset", "selected_endpoint_ids": ["createUser", "getUserById"], "excluded_methods": [], "focus_areas": []}
+  {"selection_mode": "none", "selected_endpoint_ids": [], "excluded_methods": [], "focus_areas": []}
+
+INCORRECT (will be rejected):
+  {"selection_mode": "all", "selected_endpoint_ids": ["createUser"], ...}
+  -> If you list specific IDs, use "subset", not "all".
+"""
 
 
 def _build_user_prompt(goal: str, catalog: list[dict[str, Any]]) -> str:
@@ -77,6 +94,27 @@ def _build_user_prompt(goal: str, catalog: list[dict[str, Any]]) -> str:
 
     lines.append(f"User goal: {goal}")
     return "\n".join(lines)
+
+
+# ── Repair prompt ──────────────────────────────────────────────────────────
+
+_REPAIR_PROMPT = """\
+Your previous JSON is invalid.
+
+Reason:
+{reason}
+
+Rules:
+- selection_mode="all"  -> selected_endpoint_ids must be []
+- selection_mode="subset" -> selected_endpoint_ids must list specific endpoint IDs
+- selection_mode="none" -> selected_endpoint_ids must be []
+- If you want to list specific endpoints, use "subset", not "all".
+
+Your previous JSON:
+{previous_json}
+
+Return corrected JSON only. Do not change the user's testing intent.
+Do not include markdown fences or explanation."""
 
 
 # ── Hallucination guard ──────────────────────────────────────────────────────
@@ -114,6 +152,33 @@ def _validate_intent(
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
+def _parse_llm_json(raw_response: str) -> dict[str, Any]:
+    """Strip markdown fences and parse JSON from LLM response.
+
+    Raises IntentPlannerError on invalid JSON.
+    """
+    raw_response = raw_response.strip()
+    if raw_response.startswith("```"):
+        first_newline = raw_response.find("\n")
+        if first_newline != -1:
+            raw_response = raw_response[first_newline + 1 :]
+        if raw_response.endswith("```"):
+            raw_response = raw_response[:-3].strip()
+
+    try:
+        return json.loads(raw_response)
+    except json.JSONDecodeError as exc:
+        raise IntentPlannerError(
+            f"LLM returned invalid JSON: {exc}. "
+            f"Response (first 200 chars): {raw_response[:200]!r}"
+        ) from exc
+
+
+def _build_repair_user_prompt(previous_json: str, reason: str) -> str:
+    """Build the repair prompt — no secrets, no OpenAPI, just the fix."""
+    return _REPAIR_PROMPT.format(reason=reason, previous_json=previous_json)
+
+
 def plan_intent(
     goal: str,
     endpoint_catalog: list[dict[str, Any]],
@@ -139,6 +204,7 @@ def plan_intent(
     ------
     IntentPlannerError
         If the LLM returns invalid JSON, invalid schema, or hallucinated IDs.
+        Allows one repair attempt on Pydantic validation failure.
     """
     if not endpoint_catalog:
         raise IntentPlannerError("Cannot plan intent: no endpoints in catalog.")
@@ -146,41 +212,44 @@ def plan_intent(
     system_prompt = _SYSTEM_PROMPT
     user_prompt = _build_user_prompt(goal, endpoint_catalog)
 
-    # Call LLM
+    # ── First LLM call ────────────────────────────────────────────────────
     try:
         raw_response = llm_client.call(system_prompt, user_prompt)
     except Exception as exc:
         raise IntentPlannerError(f"LLM call failed: {exc}") from exc
 
-    # Strip markdown fences if present
-    raw_response = raw_response.strip()
-    if raw_response.startswith("```"):
-        # Remove opening fence (possibly with language tag)
-        first_newline = raw_response.find("\n")
-        if first_newline != -1:
-            raw_response = raw_response[first_newline + 1 :]
-        # Remove closing fence
-        if raw_response.endswith("```"):
-            raw_response = raw_response[:-3].strip()
+    data = _parse_llm_json(raw_response)
 
-    # Parse JSON
-    try:
-        data = json.loads(raw_response)
-    except json.JSONDecodeError as exc:
-        raise IntentPlannerError(
-            f"LLM returned invalid JSON: {exc}. "
-            f"Response (first 200 chars): {raw_response[:200]!r}"
-        ) from exc
-
-    # Validate schema via Pydantic
+    # ── First Pydantic validation ─────────────────────────────────────────
     try:
         intent = TestIntent.model_validate(data)
     except ValidationError as exc:
-        raise IntentPlannerError(
-            f"LLM output does not match TestIntent schema: {exc}"
-        ) from exc
+        # ── Repair attempt (one retry) ────────────────────────────────────
+        reason = str(exc.errors()[0]["msg"]) if exc.errors() else str(exc)
+        repair_user_prompt = _build_repair_user_prompt(
+            json.dumps(data, ensure_ascii=False),
+            reason,
+        )
 
-    # Hallucination guard
+        try:
+            repair_response = llm_client.call(system_prompt, repair_user_prompt)
+        except Exception as repair_exc:
+            raise IntentPlannerError(
+                "Intent planning failed: the LLM returned an invalid "
+                "structured intent and the repair call also failed."
+            ) from repair_exc
+
+        repair_data = _parse_llm_json(repair_response)
+
+        try:
+            intent = TestIntent.model_validate(repair_data)
+        except ValidationError:
+            raise IntentPlannerError(
+                "the LLM returned an invalid structured intent after "
+                "one repair attempt."
+            )
+
+    # ── Hallucination guard ───────────────────────────────────────────────
     intent = _validate_intent(intent, endpoint_catalog)
 
     return intent

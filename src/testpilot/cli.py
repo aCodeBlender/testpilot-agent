@@ -260,6 +260,24 @@ def _print_summary(outcome) -> None:
         console.print(f"Report: {outcome.report_path}")
 
 
+# ── Web UI command ────────────────────────────────────────────────────────────
+
+
+@app.command()
+def web(
+    port: int = typer.Option(7860, help="Port for the web server."),
+    share: bool = typer.Option(False, help="Create a public Gradio link."),
+) -> None:
+    """Launch the TestPilot web interface."""
+    from testpilot.web.app import launch_app
+
+    console.print("[bold]TestPilot Web UI[/bold]")
+    console.print(f"  Starting on http://localhost:{port}")
+    console.print()
+
+    launch_app(server_port=port, share=share)
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 
